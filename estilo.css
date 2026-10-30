@@ -13,6 +13,12 @@
 @media(max-width:400px){.cover-content h1{font-size:64px}.cover-subtitle{font-size:16px}.eyebrow{letter-spacing:.12em;font-size:8px}.chapter-visual{height:280px}.chapter-copy h2{font-size:37px}.chapter-copy p:not(.section-kicker){font-size:13px}.chapter-copy .chapter-lead{font-size:16px!important}.floating-stamp{max-width:175px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.001ms!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
 
-.voice-meta #voice-caption{display:block;white-space:normal;overflow:hidden;text-overflow:clip;max-height:4.5em;font-size:12px;line-height:1.5;color:var(--cream)}
-.voice-caption-word{transition:color .12s ease}
-.voice-caption-word.is-current{color:#f0c47e;text-decoration:underline;text-underline-offset:3px}
+.spoken-copy{display:grid;gap:14px;margin:20px 0}
+.spoken-line{margin:0;color:#e0d5c7;font:normal 16px/1.8 var(--font-serif)}
+.spoken-line-lead{font-size:19px;color:var(--cream)}
+.spoken-line-signoff{font-style:italic;color:var(--muted)}
+.spoken-word{border-radius:2px;transition:background-color .12s ease,color .12s ease}
+.spoken-word.is-current{background:rgba(207,174,129,.22);color:#f4c985}
+.spoken-copy-ending{max-width:560px;margin:22px auto;color:var(--muted)}
+.spoken-copy-ending .spoken-line{text-align:center}
+@media(max-width:740px){.spoken-copy{gap:10px;margin:16px 0}.spoken-line{font-size:14px;line-height:1.75}.spoken-line-lead{font-size:17px}.spoken-copy-ending .spoken-line{text-align:left}}

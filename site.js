@@ -61,29 +61,70 @@
   const dock = document.getElementById('voice-dock');
   const playBtn = document.getElementById('voice-toggle');
   const status = document.getElementById('voice-status');
-  const audio = document.getElementById('voice-audio');
-  const video = document.getElementById('voice-video');
-  const caption = document.getElementById('voice-caption');
   const transcript = window.NOSSA_HISTORIA_LEGENDA || { paginas: [], frases: [] };
   if (cfg.gravacao) {
-    const isVideo = cfg.tipoGravacao === 'video' || /\.mp4(?:[?#]|$)/i.test(cfg.gravacao);
-    const media = isVideo ? video : audio;
-    media.src = cfg.gravacao;
-    if (isVideo) { video.hidden = false; video.style.display = 'none'; }
     dock.hidden = false;
     let audioContext;
     let audioBuffer;
-    let fallbackSource;
-    let fallbackStartedAt = 0;
-    let fallbackOffset = 0;
-    let fallbackEnded = false;
-    let fallbackTimer;
+    let source;
+    let startedAt = 0;
+    let playbackOffset = 0;
+    let playbackEnded = false;
+    let playbackTimer;
+    let isStarting = false;
     let activePhrase = -1;
     let activeWord = -1;
-    let captionWords = [];
+    let activeWords = [];
+
+    function sceneForTime(time) {
+      return transcript.paginas.reduce((page, marker) => time >= marker.inicio ? marker : page, null);
+    }
+
+    function renderTranscript() {
+      const scenePhrases = new Map(scenes.map((scene, index) => [index, []]));
+      transcript.frases.forEach((phrase, index) => {
+        const page = sceneForTime(phrase.tempos[0]);
+        if (page) scenePhrases.get(page.cena)?.push({ phrase, index });
+      });
+
+      for (const [sceneIndex, entries] of scenePhrases) {
+        if (!entries.length) continue;
+        const scene = scenes[sceneIndex];
+        const copy = scene.querySelector('.chapter-copy');
+        const transcriptBlock = document.createElement('div');
+        transcriptBlock.className = 'spoken-copy';
+
+        entries.forEach(({ phrase, index }, entryIndex) => {
+          const line = document.createElement('p');
+          line.className = 'spoken-line';
+          if (entryIndex === 0) line.classList.add('spoken-line-lead');
+          if (entryIndex === entries.length - 1) line.classList.add('spoken-line-signoff');
+          line.dataset.phrase = String(index);
+          phrase.palavras.forEach((word, wordIndex) => {
+            const span = document.createElement('span');
+            span.className = 'spoken-word';
+            span.textContent = word + (wordIndex < phrase.palavras.length - 1 ? ' ' : '');
+            line.append(span);
+          });
+          transcriptBlock.append(line);
+        });
+
+        if (copy) {
+          copy.querySelectorAll('p:not(.section-kicker)').forEach(paragraph => paragraph.remove());
+          copy.querySelector('.chapter-footer')?.before(transcriptBlock);
+        } else {
+          scene.querySelector('.ending-message')?.remove();
+          scene.querySelector('.ending-love')?.remove();
+          transcriptBlock.classList.add('spoken-copy-ending');
+          scene.querySelector('#restart-button')?.before(transcriptBlock);
+        }
+      }
+    }
+
+    renderTranscript();
 
     function updateStory(time) {
-      const page = transcript.paginas.reduce((currentPage, marker) => time >= marker.inicio ? marker : currentPage, null);
+      const page = sceneForTime(time);
       if (page && current !== page.cena) showScene(page.cena);
 
       let phraseIndex = -1;
@@ -94,21 +135,11 @@
       if (phraseIndex !== activePhrase) {
         activePhrase = phraseIndex;
         activeWord = -1;
-        caption.replaceChildren();
-        captionWords = [];
         if (phraseIndex < 0) {
-          caption.hidden = true;
           return;
         }
-        const phrase = transcript.frases[phraseIndex];
-        phrase.palavras.forEach((word, index) => {
-          const span = document.createElement('span');
-          span.className = 'voice-caption-word';
-          span.textContent = word + (index < phrase.palavras.length - 1 ? ' ' : '');
-          caption.append(span);
-          captionWords.push(span);
-        });
-        caption.hidden = false;
+        activeWords = [...(scenes[page.cena]?.querySelector(`[data-phrase="${phraseIndex}"]`)?.querySelectorAll('.spoken-word') ?? [])];
+        activeWords[0]?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
       }
 
       if (phraseIndex < 0) return;
@@ -119,76 +150,73 @@
         wordIndex = index;
       }
       if (wordIndex !== activeWord) {
-        captionWords[activeWord]?.classList.remove('is-current');
-        captionWords[wordIndex]?.classList.add('is-current');
+        activeWords[activeWord]?.classList.remove('is-current');
+        activeWords[wordIndex]?.classList.add('is-current');
         activeWord = wordIndex;
       }
     }
 
-    function currentPlaybackTime() {
-      return fallbackSource ? fallbackOffset + performance.now() / 1000 - fallbackStartedAt : media.currentTime;
+    function playbackTime() {
+      return source ? playbackOffset + performance.now() / 1000 - startedAt : playbackOffset;
     }
 
     function sync() {
-      const playing = Boolean(fallbackSource) || (!media.paused && !media.ended);
-      const ended = fallbackEnded || media.ended;
+      const playing = Boolean(source);
       dock.classList.toggle('is-playing', playing);
       playBtn.textContent = playing ? 'Ⅱ' : '▶';
       playBtn.setAttribute('aria-label', playing ? 'Pausar gravação' : 'Reproduzir gravação');
-      status.textContent = ended ? 'Gravação concluída ♡' : playing ? 'Reproduzindo sua mensagem…' : 'Aperte play para ouvir';
+      status.textContent = isStarting ? 'Preparando a gravação…' : playbackEnded ? 'Gravação concluída ♡' : playing ? 'Reproduzindo sua mensagem…' : 'Aperte play para ouvir';
     }
-    playBtn.addEventListener('click', async () => {
-      if (fallbackSource) {
-        fallbackOffset += performance.now() / 1000 - fallbackStartedAt;
-        fallbackSource.onended = null;
-        fallbackSource.stop();
-        fallbackSource = null;
-        window.clearInterval(fallbackTimer);
+
+    async function startPlayback() {
+      if (isStarting) return;
+      isStarting = true;
+      playbackEnded = false;
+      sync();
+      try {
+        audioContext ??= new AudioContext();
+        await audioContext.resume();
+        if (!audioBuffer) {
+          const response = await fetch(cfg.gravacao);
+          if (!response.ok) throw new Error('Falha ao carregar o arquivo de áudio');
+          audioBuffer = await audioContext.decodeAudioData(await response.arrayBuffer());
+        }
+        if (playbackOffset === 0) showScene(transcript.paginas[0]?.cena ?? 1);
+        source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContext.destination);
+        startedAt = performance.now() / 1000;
+        source.onended = () => {
+          if (!source) return;
+          source = null;
+          playbackOffset = 0;
+          playbackEnded = true;
+          window.clearInterval(playbackTimer);
+          updateStory(audioBuffer.duration);
+          sync();
+        };
+        source.start(0, playbackOffset);
+        isStarting = false;
+        updateStory(playbackTime());
+        playbackTimer = window.setInterval(() => updateStory(playbackTime()), 60);
+        sync();
+      } catch (error) {
+        isStarting = false;
+        status.textContent = 'Não foi possível abrir a gravação';
+      }
+    }
+
+    playBtn.addEventListener('click', () => {
+      if (source) {
+        playbackOffset = playbackTime();
+        source.onended = null;
+        source.stop();
+        source = null;
+        window.clearInterval(playbackTimer);
         sync();
         return;
       }
-      if (!media.paused) { media.pause(); return; }
-      if (media.currentTime === 0 && fallbackOffset === 0) showScene(transcript.paginas[0]?.cena ?? 1);
-      if (isVideo) video.style.display = 'block';
-      try {
-        await media.play();
-      } catch (error) {
-        try {
-          status.textContent = 'Preparando a gravação…';
-          audioContext ??= new AudioContext();
-          await audioContext.resume();
-          if (!audioBuffer) {
-            const response = await fetch(cfg.gravacao);
-            if (!response.ok) throw new Error('Falha ao carregar o arquivo de áudio');
-            audioBuffer = await audioContext.decodeAudioData(await response.arrayBuffer());
-          }
-          fallbackOffset %= audioBuffer.duration;
-          fallbackSource = audioContext.createBufferSource();
-          fallbackSource.buffer = audioBuffer;
-          fallbackSource.connect(audioContext.destination);
-          fallbackStartedAt = performance.now() / 1000;
-          fallbackSource.onended = () => {
-            if (!fallbackSource) return;
-            fallbackSource = null;
-            window.clearInterval(fallbackTimer);
-            fallbackOffset = 0;
-            fallbackEnded = true;
-            sync();
-          };
-          fallbackEnded = false;
-          fallbackSource.start(0, fallbackOffset);
-          updateStory(currentPlaybackTime());
-          fallbackTimer = window.setInterval(() => updateStory(currentPlaybackTime()), 60);
-          sync();
-        } catch (fallbackError) {
-          status.textContent = 'Não foi possível abrir a gravação';
-        }
-      }
+      startPlayback();
     });
-    media.addEventListener('play', () => { sync(); updateStory(media.currentTime); });
-    media.addEventListener('pause', sync);
-    media.addEventListener('timeupdate', () => updateStory(media.currentTime));
-    media.addEventListener('ended', () => { sync(); updateStory(media.duration); });
-    media.addEventListener('error', () => {status.textContent = 'Aperte play para tentar outra forma de reprodução';});
   }
 })();
