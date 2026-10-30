@@ -133,9 +133,11 @@
         else break;
       }
       if (phraseIndex !== activePhrase) {
+        activeWords[activeWord]?.classList.remove('is-current');
         activePhrase = phraseIndex;
         activeWord = -1;
         if (phraseIndex < 0) {
+          activeWords = [];
           return;
         }
         activeWords = [...(scenes[page.cena]?.querySelector(`[data-phrase="${phraseIndex}"]`)?.querySelectorAll('.spoken-word') ?? [])];
@@ -193,6 +195,10 @@
           playbackEnded = true;
           window.clearInterval(playbackTimer);
           updateStory(audioBuffer.duration);
+          activeWords[activeWord]?.classList.remove('is-current');
+          activeWords = [];
+          activePhrase = -1;
+          activeWord = -1;
           sync();
         };
         source.start(0, playbackOffset);
